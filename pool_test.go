@@ -13,7 +13,7 @@ import (
 var serverAddr = "127.0.0.1:8003"
 
 func TestMain(t *testing.T) {
-	var pool *Pool
+	var pool *Pool[*net.TCPConn]
 	var err error
 	var n int
 	go tcpServer()
@@ -21,21 +21,21 @@ func TestMain(t *testing.T) {
 	time.Sleep(time.Millisecond * 10)
 
 	t.Run("create connection pool", func(t *testing.T) {
-		pool, err = New(2, 10, func() interface{} {
+		pool, err = New[*net.TCPConn](2, 10, func() (*net.TCPConn, error) {
 			addr, _ := net.ResolveTCPAddr("tcp4", serverAddr)
 			cli, err := net.DialTCP("tcp4", nil, addr)
 			if err != nil {
-				log.Fatalf("create client connection error: %v", err)
+				return nil, err
+				// log.Fatalf("create client connection error: %v", err)
 			}
-			return cli
+			return cli, nil
 		})
 		assert.NoError(t, err)
-		pool.Ping = func(conn interface{}) bool {
+		pool.Ping = func(t *net.TCPConn) bool {
 			return true
 		}
-
-		pool.Close = func(conn interface{}) {
-			conn.(*net.TCPConn).Close()
+		pool.Close = func(conn *net.TCPConn) {
+			conn.Close()
 		}
 		assert.Equal(t, pool.Len(), 2)
 	})
@@ -43,36 +43,34 @@ func TestMain(t *testing.T) {
 	t.Run("get connection then put", func(t *testing.T) {
 		v, err := pool.Get()
 		assert.NoError(t, err)
-		cli := v.(*net.TCPConn)
-		n, err = cli.Write([]byte("PING"))
+		n, err = v.Write([]byte("PING"))
 		assert.NoError(t, err)
 		assert.Equal(t, n, 4)
 		re := make([]byte, 4)
-		n, err = cli.Read(re)
+		n, err = v.Read(re)
 		assert.NoError(t, err)
 		assert.Equal(t, n, 4)
 		assert.Equal(t, string(re), "PONG")
 		assert.Equal(t, pool.Len(), 1)
-		pool.Put(cli)
+		pool.Put(v)
 		assert.Equal(t, pool.Len(), 2)
 	})
 
 	t.Run("get connection reuse then put", func(t *testing.T) {
 		v, err := pool.Get()
 		assert.NoError(t, err)
-		cli := v.(*net.TCPConn)
 		for i := 0; i < 10; i++ {
-			n, err = cli.Write([]byte("PING"))
+			n, err = v.Write([]byte("PING"))
 			assert.NoError(t, err)
 			assert.Equal(t, n, 4)
 			re := make([]byte, 4)
-			n, err = cli.Read(re)
+			n, err = v.Read(re)
 			assert.NoError(t, err)
 			assert.Equal(t, n, 4)
 			assert.Equal(t, string(re), "PONG")
 		}
 		assert.Equal(t, pool.Len(), 1)
-		pool.Put(cli)
+		pool.Put(v)
 		assert.Equal(t, pool.Len(), 2)
 	})
 
@@ -80,35 +78,33 @@ func TestMain(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			v, err := pool.Get()
 			assert.NoError(t, err)
-			cli := v.(*net.TCPConn)
-			n, err = cli.Write([]byte("PING"))
+			n, err = v.Write([]byte("PING"))
 			assert.NoError(t, err)
 			assert.Equal(t, n, 4)
 			re := make([]byte, 4)
-			n, err = cli.Read(re)
+			n, err = v.Read(re)
 			assert.NoError(t, err)
 			assert.Equal(t, n, 4)
 			assert.Equal(t, string(re), "PONG")
-			pool.Put(cli)
+			pool.Put(v)
 		}
 		assert.Equal(t, pool.Len(), 2)
 	})
 
 	t.Run("get overlay connections", func(t *testing.T) {
-		conns := make([]interface{}, 20)
+		conns := make([]*net.TCPConn, 20)
 		for i := 0; i < 20; i++ {
-			v, err := pool.Get()
+			conn, err := pool.Get()
 			assert.NoError(t, err)
-			cli := v.(*net.TCPConn)
-			n, err = cli.Write([]byte("PING"))
+			n, err = conn.Write([]byte("PING"))
 			assert.NoError(t, err)
 			assert.Equal(t, n, 4)
 			re := make([]byte, 4)
-			n, err = cli.Read(re)
+			n, err = conn.Read(re)
 			assert.NoError(t, err)
 			assert.Equal(t, n, 4)
 			assert.Equal(t, string(re), "PONG")
-			conns[i] = cli
+			conns[i] = conn
 		}
 		for _, cli := range conns {
 			pool.Put(cli)
@@ -119,12 +115,11 @@ func TestMain(t *testing.T) {
 	t.Run("get connection and no back", func(t *testing.T) {
 		v, err := pool.Get()
 		assert.NoError(t, err)
-		cli := v.(*net.TCPConn)
-		n, err = cli.Write([]byte("PING"))
+		n, err = v.Write([]byte("PING"))
 		assert.NoError(t, err)
 		assert.Equal(t, n, 4)
 		re := make([]byte, 4)
-		n, err = cli.Read(re)
+		n, err = v.Read(re)
 		assert.NoError(t, err)
 		assert.Equal(t, n, 4)
 		assert.Equal(t, string(re), "PONG")

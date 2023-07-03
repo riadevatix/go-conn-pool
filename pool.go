@@ -12,51 +12,52 @@ var (
 )
 
 // Pool common connection pool
-type Pool struct {
+type Pool[T any] struct {
 	// New create connection function
-	New func() interface{}
+	New func() (T, error)
 	// Ping check connection is ok
-	Ping func(interface{}) bool
+	Ping func(T) bool
 	// Close close connection
-	Close func(interface{})
-	store chan interface{}
-	mu    sync.Mutex
+	Close     func(T)
+	connStore chan T
+	mu        sync.Mutex
 }
 
 // New create a pool with capacity
-func New(initCap, maxCap int, newFunc func() interface{}) (*Pool, error) {
+func New[T any](initCap, maxCap int, newFunc func() (T, error)) (*Pool[T], error) {
 	if maxCap == 0 || initCap > maxCap {
 		return nil, fmt.Errorf("invalid capacity settings")
 	}
-	p := new(Pool)
-	p.store = make(chan interface{}, maxCap)
+	p := new(Pool[T])
+	p.connStore = make(chan T, maxCap)
 	if newFunc != nil {
 		p.New = newFunc
 	}
 	for i := 0; i < initCap; i++ {
-		v, err := p.create()
+		conn, err := p.create()
 		if err != nil {
 			return p, err
 		}
-		p.store <- v
+		p.connStore <- conn
 	}
 	return p, nil
 }
 
 // Len returns current connections in pool
-func (p *Pool) Len() int {
-	return len(p.store)
+func (p *Pool[T]) Len() int {
+	return len(p.connStore)
 }
 
 // Get returns a conn form store or create one
-func (p *Pool) Get() (interface{}, error) {
-	if p.store == nil {
+func (p *Pool[T]) Get() (conn T, err error) {
+	if p.connStore == nil {
 		// pool aleardy destroyed, returns error
-		return nil, ErrClosed
+		return conn, ErrClosed
 	}
+
 	for {
 		select {
-		case v := <-p.store:
+		case v := <-p.connStore:
 			if p.Ping != nil && !p.Ping(v) {
 				continue
 			}
@@ -69,39 +70,39 @@ func (p *Pool) Get() (interface{}, error) {
 }
 
 // Put set back conn into store again
-func (p *Pool) Put(v interface{}) {
+func (p *Pool[T]) Put(conn T) {
 	select {
-	case p.store <- v:
+	case p.connStore <- conn:
 		return
 	default:
 		// pool is full, close passed connection
 		if p.Close != nil {
-			p.Close(v)
+			p.Close(conn)
 		}
 		return
 	}
 }
 
 // Destroy clear all connections
-func (p *Pool) Destroy() {
+func (p *Pool[T]) Destroy() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.store == nil {
+	if p.connStore == nil {
 		// pool aleardy destroyed
 		return
 	}
-	close(p.store)
-	for v := range p.store {
+	close(p.connStore)
+	for v := range p.connStore {
 		if p.Close != nil {
 			p.Close(v)
 		}
 	}
-	p.store = nil
+	p.connStore = nil
 }
 
-func (p *Pool) create() (interface{}, error) {
+func (p *Pool[T]) create() (conn T, err error) {
 	if p.New == nil {
-		return nil, fmt.Errorf("Pool.New is nil, can not create connection")
+		return conn, fmt.Errorf("Pool.New is nil, can not create connection")
 	}
-	return p.New(), nil
+	return p.New()
 }

@@ -30,7 +30,7 @@ go get -u github.com/go-baa/pool
 
 Usage:
 
-```
+```go
 package main
 
 import (
